@@ -10,7 +10,7 @@ driver: full analysis, reversed interface header, non-destructive PoC.
 |---|---|---|---|---|---|
 | [CorMem.sys](report/cormem/ANALYSIS.md) | Teledyne Digital Imaging | 9.00 | arbitrary physical memory map, raw I/O port R/W, kernel pointer disclosure | not listed | none |
 | [AsIO3.sys](report/asio3/ANALYSIS.md) | ASUSTeK | 1.02.40 | ungated PCI config read, firmware-region phys map (RW), wide port allowlist (SMI/CMOS/EC), contiguous alloc oracle | not listed | none |
-| [KslD.sys / MpKslDrv](report/ksld/ANALYSIS.md) | Microsoft (Defender) | - | full TDT command interface: arbitrary phys page read, kernel routine addr leak, kernel file read, SPI flash read, R/W mmcopy — behind image-name auth | n/a (in-box) | pending |
+| [KslD.sys / MpKslDrv](report/ksld/ANALYSIS.md) | Microsoft (Defender) | - | Intel TDT command interface: arbitrary phys page read, kernel routine addr leak, kernel file read, SPI flash read — gated by image-name compare against an admin-writable registry value | n/a (in-box) | pending |
 
 ---
 
@@ -110,12 +110,15 @@ arbitrary PID, and a virtual-memory copy primitive with separate read/write
 flag bits.
 
 the catch: `OpCreate` gates the device on **string comparison of the caller's
-image path** against the configured consumer name (MsMpEng). No token check,
-no signature check — authentication by string. Whether that's passable by an
-admin (registry-fed config, path equivalence) decides if this is an
-admin→kernel elevation report to MSRC.
+image path** against `AllowedProcessName` — a value the driver reads at init
+from the service's `Parameters` registry key. HKLM, admin-writable. No token
+check, no signature check — authentication by a registry string. an admin who
+sets that value to their own image path passes the gate and gets kernel
+physical-memory read through a Microsoft-signed driver; the mmcopy write path
+being dead code keeps it at read-only, and the transient-instance timing keeps
+it "moderate".
 
-- [`report/ksld/ANALYSIS.md`](report/ksld/ANALYSIS.md) — full command reference, the gate, impact matrix, open items
+- [`report/ksld/ANALYSIS.md`](report/ksld/ANALYSIS.md) — full command reference, the gate and its registry source, impact matrix, recommendations
 
 ---
 
