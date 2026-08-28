@@ -73,7 +73,8 @@ not cross a 4KB page boundary. Then:
 ```
 KeStackAttachProcess(connected_process)
 ZwOpenSection(\device\physicalmemory, SECTION_MAP_READ)
-ZwMapViewOfSection(..., Protect=PAGE_READONLY; retry PAGE_READWRITE on access-denied)
+ZwMapViewOfSection(..., Protect=PAGE_READONLY; retry PAGE_READWRITE on
+                   STATUS_SECTION_PROTECTION_MISMATCH)
 memmove(out_buffer, mapped + offset_in_page, count)   @ DISPATCH_LEVEL, TLB flush
 ```
 

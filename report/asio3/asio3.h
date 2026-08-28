@@ -20,7 +20,8 @@
 
 // device type 0xa040 is ASUS custom. transfer method varies per ioctl, so
 // each code spells out its own CTL_CODE instead of one macro.
-#define ASIO3_CTL(fn, method) CTL_CODE(0xa040, fn, FILE_ANY_ACCESS, method)
+#define ASIO3_CTL(fn, method)          CTL_CODE(0xa040, fn, FILE_ANY_ACCESS, method)
+#define ASIO3_CTL_A(fn, access, method) CTL_CODE(0xa040, fn, access, method)
 
 enum asio3_ioctl : DWORD {
     // port io family - all allowlist-checked (43 static ranges in .data,
@@ -42,20 +43,23 @@ enum asio3_ioctl : DWORD {
     asio3_contiguous_free  = ASIO3_CTL(0x3E5, METHOD_BUFFERED), // 0xa0400f94
     asio3_map_op_2000      = ASIO3_CTL(0x800, METHOD_BUFFERED), // 0xa0402000
     asio3_port_write_2004  = ASIO3_CTL(0x801, METHOD_BUFFERED), // 0xa0402004
-    asio3_phys_map         = ASIO3_CTL(0x803, METHOD_BUFFERED), // 0xa040200c
+    asio3_phys_map         = ASIO3_CTL(0x803, METHOD_BUFFERED),   // 0xa040200c
+    asio3_map_get_2010     = ASIO3_CTL(0x804, METHOD_BUFFERED),   // 0xa0402010 -> sub_1400041EA query
     asio3_map_read_2014    = ASIO3_CTL(0x805, METHOD_BUFFERED), // 0xa0402014
     asio3_map_op_2018      = ASIO3_CTL(0x806, METHOD_BUFFERED), // 0xa0402018
     asio3_map_op_244c      = ASIO3_CTL(0x913, METHOD_BUFFERED), // 0xa040244c
     asio3_unmap            = ASIO3_CTL(0x914, METHOD_BUFFERED), // 0xa0402450
     // haltranslate family: 6400/6404/6408 = mem-or-io read b/w/d
-    asio3_halt_read_b      = ASIO3_CTL(0x900, METHOD_BUFFERED), // 0xa0406400
-    asio3_halt_read_w      = ASIO3_CTL(0x901, METHOD_BUFFERED), // 0xa0406401
-    asio3_halt_read_w2     = ASIO3_CTL(0x901 + 1, METHOD_BUFFERED),
-    asio3_halt_read_d      = ASIO3_CTL(0x902, METHOD_BUFFERED), // 0xa0406408
-    asio3_rdmsr_v2         = ASIO3_CTL(0x916, METHOD_BUFFERED), // 0xa0406458, msr >= 8
-    asio3_port_out_b       = ASIO3_CTL(0x910, METHOD_BUFFERED), // 0xa040a440
-    asio3_port_out_w       = ASIO3_CTL(0x911, METHOD_BUFFERED), // 0xa040a444
-    asio3_port_out_d       = ASIO3_CTL(0x912, METHOD_BUFFERED), // 0xa040a448
+    // haltranslate family (FILE_READ_ACCESS): 6400=b 6404=w 6408=d
+    // (6401/6405 are the same funcs with the method bits set)
+    asio3_halt_read_b      = ASIO3_CTL_A(0x900, FILE_READ_ACCESS, METHOD_BUFFERED),  // 0xa0406400
+    asio3_halt_read_w      = ASIO3_CTL_A(0x901, FILE_READ_ACCESS, METHOD_BUFFERED),  // 0xa0406404
+    asio3_halt_read_d      = ASIO3_CTL_A(0x902, FILE_READ_ACCESS, METHOD_BUFFERED),  // 0xa0406408
+    asio3_rdmsr_v2         = ASIO3_CTL_A(0x916, FILE_READ_ACCESS, METHOD_BUFFERED),  // 0xa0406458, msr >= 8
+    // port write family (FILE_WRITE_ACCESS)
+    asio3_port_out_b       = ASIO3_CTL_A(0x910, FILE_WRITE_ACCESS, METHOD_BUFFERED), // 0xa040a440
+    asio3_port_out_w       = ASIO3_CTL_A(0x911, FILE_WRITE_ACCESS, METHOD_BUFFERED), // 0xa040a444
+    asio3_port_out_d       = ASIO3_CTL_A(0x912, FILE_WRITE_ACCESS, METHOD_BUFFERED), // 0xa040a448
 };
 
 enum asio3_status : NTSTATUS {

