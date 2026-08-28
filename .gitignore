@@ -1,0 +1,15 @@
+# never publish driver binaries or derived artifacts
+*.sys
+*.asm
+targets/
+out/
+report_top.txt
+scan_results.json
+
+# feeds are auto-downloaded, too big for git
+feeds_loldrivers.json
+ms_blocklist.xml
+
+python/
+__pycache__/
+*.pyc
