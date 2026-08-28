@@ -13,3 +13,9 @@ ms_blocklist.xml
 python/
 __pycache__/
 *.pyc
+
+# build artifacts
+*.exe
+*.obj
+*.pdb
+*.ilk

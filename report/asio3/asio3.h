@@ -20,8 +20,8 @@
 
 // device type 0xa040 is ASUS custom. transfer method varies per ioctl, so
 // each code spells out its own CTL_CODE instead of one macro.
-#define ASIO3_CTL(fn, method)          CTL_CODE(0xa040, fn, FILE_ANY_ACCESS, method)
-#define ASIO3_CTL_A(fn, access, method) CTL_CODE(0xa040, fn, access, method)
+#define ASIO3_CTL(fn, method)          CTL_CODE(0xa040u, fn, FILE_ANY_ACCESS, method)
+#define ASIO3_CTL_A(fn, access, method) CTL_CODE(0xa040u, fn, access, method)
 
 enum asio3_ioctl : DWORD {
     // port io family - all allowlist-checked (43 static ranges in .data,
@@ -62,7 +62,7 @@ enum asio3_ioctl : DWORD {
     asio3_port_out_d       = ASIO3_CTL_A(0x912, FILE_WRITE_ACCESS, METHOD_BUFFERED), // 0xa040a448
 };
 
-enum asio3_status : NTSTATUS {
+enum asio3_status : uint32_t {
     asio3_ok              = 0,
     asio3_err_failed      = 0xC0000001,
     asio3_err_nores       = 0xC0000004,   // buffer too small

@@ -42,7 +42,7 @@ enum cormem_ioctl : DWORD {
     cormem_query_816     = CORMEM_IOCTL(0x816),  // 0x222058
 };
 
-enum cormem_status : NTSTATUS {
+enum cormem_status : uint32_t {
     cormem_ok              = 0x00000000,
     cormem_err_failed      = 0xC0000001,
     cormem_err_invalid     = 0xC000000D,

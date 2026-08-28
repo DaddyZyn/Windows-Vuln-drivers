@@ -136,7 +136,8 @@ struct MEMU_COOKIE_REQ {
             uint32_t OutFlags;                         // +0x1C
             uint32_t SessionVersion;                   // +0x20
             uint32_t DriverVersion;                    // +0x24
-            uint32_t FunctionCount;                    // +0x28 (274)
+            uint32_t FunctionCount;                    // +0x28
+            uint32_t PadBetween;                       // +0x2C (gap to +0x30)
             uint64_t SessionKernel;                    // +0x30 kernel SUPDRVSESSION*
         };
     };
