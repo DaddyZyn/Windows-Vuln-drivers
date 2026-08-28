@@ -266,6 +266,18 @@ See `asio3.h` (interface) and `poc_asio3.cpp` (non-destructive: PCI vendor/
 device ID read of the host bridge, allowlisted MSR read of `0xCE`
 PLATFORM_INFO, contiguous alloc + physical address oracle). All read-only.
 
+## 7b. Live notes (analysis host = ASUS board)
+
+- The driver runs via the **`Asusgio3`** service (Start=System, running at
+  boot on this board). Creating a second service for the same .sys fails
+  with ERROR_ALREADY_EXISTS (183) — the \Driver\Asio3 object already
+  exists. Use the running instance.
+- Device: `\\.\Asusgio3` (symlink from `\DosDevices\Asusgio3`), openable
+  by admin.
+- PoC: `poc_asio3.exe` (compiled, in this folder) — PCI config read of the
+  host bridge, allowlisted MSR 0xCE read, POST port 0x80 read, contiguous
+  alloc oracle. All read-only.
+
 ## 8. Disclosure status
 
 Static analysis complete for the primary surfaces; open items: runtime

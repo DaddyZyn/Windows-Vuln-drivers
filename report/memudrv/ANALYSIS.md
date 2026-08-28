@@ -183,6 +183,23 @@ engineered within this pass. The finding stands as a design/blocklist concern
 (stripped-hardening VBoxDrv fork shipping to a mass audience), with live
 exploitation unconfirmed — same treatment as the MpKslDrv result.
 
+## 5c. Session model (from the live-test follow-up)
+
+- Session creation happens ONLY at IRP_MJ_CREATE (`sub_1400056D0`: allocates
+  the session, validates the device-extension magic `'devb'`, sets
+  `session+12 = isMainDevice`, binds pid/process) + `sub_140001450` (stores it
+  in `FileObject->FsContext`).
+- The Fast-IO command path does **get-only** lookup (`sub_1400015C0`):
+  FsContext back-pointer must match (`session+32 == &FsContext`), plus
+  pid/process binding — **no session is created there**.
+- `session+12` selects the dispatcher: main-device sessions (flag=1) route to
+  the full `supdrvIOCtl`; U-device sessions (flag=0) route to a second
+  dispatcher (`sub_140003C00`).
+- Live result: commands return STATUS_NOT_SUPPORTED for externally created
+  sessions on BOTH devices — the session the driver hands an external
+  process is not the state the command path expects (the MEmu service
+  session carries additional state established outside the traced flow).
+
 ## 6. Open items
 
 - Writer of the loader-lockdown flag (`devext+0x48`) — not found in traced
