@@ -142,6 +142,8 @@ admin → kernel code execution via `CreateFile` + three IOCTLs on a driver
 installed by a mainstream Android emulator, invisible to the blocklist.
 
 - [`report/memudrv/ANALYSIS.md`](report/memudrv/ANALYSIS.md) — loader chain, fallback bypass, primitive table, blocklist case
+- [`report/memudrv/memudrv.h`](report/memudrv/memudrv.h) — reversed interface header (full IOCTL table + unioned request structs)
+- [`report/memudrv/poc_memudrv.cpp`](report/memudrv/poc_memudrv.cpp) — non-destructive PoC (handshake + session-ptr leak + LDR_OPEN fallback probe)
 
 ---
 
