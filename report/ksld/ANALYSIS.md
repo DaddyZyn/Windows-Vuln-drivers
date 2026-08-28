@@ -4,8 +4,7 @@
 Defender as randomly-suffixed instances (`MpKsl<hex>`) under both
 `System32\drivers\` and `System32\drivers\wd\`
 **Signer:** Microsoft Windows (inbox, WHQL)
-**Status:** recon — **no exploitable user→kernel path confirmed**; this note maps
-the surface and documents what dynamic work remains
+**Status:** recon complete — **closed as not-a-vulnerability** (see §6)
 **Analysis date:** 2026-08-28
 
 ---
@@ -98,12 +97,41 @@ fast path to a yes/no.
 - Registry: `ZwDeleteKey`/`ZwSetValueKey` imports — cleanup of its own service
   keys during transient instance lifecycle.
 
-## 5. Assessment
+## 5. Verdict: the PID reaches ZwOpenProcess, but crosses no boundary
 
-The single-IOCTL design with internally-registered providers and a
-SYSTEM-consumer device is a narrow surface by construction. The interesting
-question is narrow too: *provider-steered PID targeting*. Until the vtable
-reconstruction lands, this is a recon note, not a vulnerability report — and it
-stays honest that way. If the dynamic test shows provider dispatch accepts an
-arbitrary PID from the buffered input, that graduates to a report; otherwise
-MpKslDrv joins the "analyzed — no user-facing primitive" list.
+Vtable reconstruction settled §3. The provider class vtable is at `0x140046840`:
+
+```
++0x00  0x140004CE0   destructor (via ctor/dtor helper sub_140004D20)
++0x08  0x1400058F0   "match" slot — IS open_target_by_cid
++0x10  0x140005AD0   "dispatch" slot — operate on the opened handle
+```
+
+The multiplexer flow, resolved: `0x222044 {pid}` walks providers calling
+vtable+8 = **open_target_by_cid(provider, pid)** directly — the "match" step
+*is* the process open (`ZwOpenProcess(ClientId=pid, DesiredAccess=0x80000000)`,
+skipped when the provider already holds a handle at object `+0x58`). First
+provider to succeed runs vtable+0x10 against the handle.
+
+So yes — the IOCTL's PID dword is attacker-steerable and reaches
+`ZwOpenProcess` in kernel mode. It still isn't a vulnerability:
+
+- `Zw*` access checks evaluate the **calling process's token**. An unprotected
+  admin opening a PPL target gets `STATUS_ACCESS_DENIED` exactly as it would
+  from user mode — protection is checked against the opener, not the driver.
+- For every non-protected process, an admin already holds `SeDebugPrivilege`;
+  routing the open through a Microsoft-signed driver grants nothing extra.
+- The opened handle lands in the provider object (`+0x58`), not the caller's
+  handle table — the caller only sees what the vtable+0x10 operation outputs.
+
+Unusual design, privilege math unchanged. MpKslDrv is Defender plumbing doing
+Defender things, for a PPL consumer (MsMpEng) anyway. Closed.
+
+## 6. Assessment
+
+Single-IOCTL design, internally-registered providers, SYSTEM consumer — narrow
+by construction, and the one spicy path (IOCTL-steered kernel process opens)
+preserves all privilege boundaries. MpKslDrv joins the "analyzed — no
+user-facing privilege primitive" list. Lesson for the hunt: Microsoft's
+diagnostic/AV drivers expose *machinery*, not *primitives* — the productive
+lane remains vendor-signed utility drivers.
