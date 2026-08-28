@@ -37,7 +37,14 @@ is bookkeeping, not access control).
 
 ## 2. Attack surface
 
-- Device `\\.\Asusgio3`, default WDM ACL → openable by admin/SYSTEM.
+- Device `\\.\Asusgio3`. **The CREATE path is caller-gated**: `sub_1400018DC`
+  enumerates the calling process's loaded modules and `sub_14000334C` checks
+  their base addresses against a whitelist populated by the
+  `PsSetCreateProcessNotifyRoutineEx` callback (ASUS-signed software only).
+  Non-matching callers — including plain administrators — get
+  STATUS_ACCESS_DENIED at open (live-confirmed: elevated admin, GLE=5).
+  This corrects the earlier "default ACL = open to admin" assumption; the
+  effective gate is admin **and** ASUS-process validation.
 - WDM dispatch at `sub_140001960`; ~30 IOCTLs on device type `0xa040`.
 - `WaitForIoAccess` named event (`\BaseNamedObjects\WaitForIoAccess`) serializes
   operations — arbitration between ASUS components, **not** a security gate.
