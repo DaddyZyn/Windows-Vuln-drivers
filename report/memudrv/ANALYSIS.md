@@ -160,6 +160,29 @@ manipulation, EDR tampering, and credential theft with no additional bugs.
    outside the MEmu install tree; hash-block the driver where the emulator is
    not business-required.
 
+## 5b. Live validation (analysis host, driver 5.1.34 present-but-stopped)
+
+| step | action | result |
+|---|---|---|
+| 1 | service `MEmuDrv` (Start=Manual) | starts successfully |
+| 2 | open `\\.\MEmuDrv` / `\\.\MEmuDrvU` | **FAIL (err 2)** — the driver never calls `IoCreateSymbolicLink`; no DOS symlink exists |
+| 3 | open `\\.\GlobalROOT\Device\MEmuDrv` and `...\\MEmuDrvU` | **both open OK** — device objects reachable |
+| 4 | `SUP_IOCTL_COOKIE` handshake (full decoded protocol: 'tori' code-echo, 0x42000042 header magic, sizes) | **STATUS_NOT_SUPPORTED (err 50) on both devices** |
+
+Root cause analysis of the err-50: the fast-io handler (sub_1400120C0)
+creates/looks up the session per process, but every command path returns
+STATUS_NOT_SUPPORTED for an externally-created session — either the session
+requires state established by the MEmu service flow (privilege marker set
+post-create), or an additional validation layer in the deployed build. The
+IRP path (sub_1400119F0) serves **only the IDC codes** (kernel component
+factories) — user ioctls are Fast-IO exclusively.
+
+Net: the loader chain is fully confirmed **statically** (§2), but live access
+is blocked by a session-level enforcement step that was not reverse-
+engineered within this pass. The finding stands as a design/blocklist concern
+(stripped-hardening VBoxDrv fork shipping to a mass audience), with live
+exploitation unconfirmed — same treatment as the MpKslDrv result.
+
 ## 6. Open items
 
 - Writer of the loader-lockdown flag (`devext+0x48`) — not found in traced

