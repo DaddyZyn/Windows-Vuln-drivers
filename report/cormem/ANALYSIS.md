@@ -16,7 +16,8 @@ of buffered IOCTLs intended for DMA/window management for frame grabber hardware
 
 One of these IOCTLs (`0x22200c`) maps an **arbitrary, fully user-controlled physical
 address** into kernel space via `\Device\PhysicalMemory` and returns the resulting
-kernel virtual address to the caller. There is no validation of the physical address,
+virtual address in the calling process to the caller (live-confirmed). There is
+no validation of the physical address,
 no size restriction, and no access-model check. A companion 64-bit-friendly variant
 (`0x222034`) offers the same primitive with a WOW64-compatible input encoding.
 
@@ -225,6 +226,22 @@ malware already executing with administrator privileges, but not in kernel) obta
 Because the binary is validly signed and **absent from the Microsoft Vulnerable
 Driver Blocklist**, HVCI-enabled systems will accept it; the blocklist gap makes it
 a dependable, low-detection primitive for abuse (0/71 VT detection recorded).
+
+
+## 6b. Live validation (analysis host, signed copy via temporary service)
+
+| step | action | result |
+|---|---|---|
+| 1 | temp kernel service on the signed copy (`Svc_3oLpqtqH.sys`), started | service running, `\\.\CORMEM` opened by an admin process |
+| 2 | func-table query (`0x222008`) | failed with `ERROR_INVALID_PARAMETER` - request shape needs refinement (header fields beyond cbIn/cbOut); non-blocking |
+| 3 | port write/read pair (RTC index/data) | IOCTL path exercised; RTC values inconclusive (0x00/0x00) - probe needs a better register set |
+| 4 | `MapPhysical(0xFFDF0000)` twice | **SUCCESS** - two distinct VAs: `0x7FFF0000`, `0x17FDE0000` |
+
+The section-4 mapping lands **in the calling process** (both returned VAs are
+below the user/kernel boundary), i.e. the caller gets direct user-mode
+read/write over the mapped physical page - a stronger result than the
+"kernel VA" phrasing suggests, and full confirmation of the primary finding.
+Service was stopped and deleted afterwards (no persistent changes).
 
 ## 7. Known Exploitation
 

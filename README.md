@@ -30,6 +30,9 @@ what it lets you do from user mode:
 
 documented in-the-wild abuse (Cobalt Strike / IcedID loaders, cheat kernel
 loaders, 0/71 VT detection), still not blocklisted, still no CVE.
+**live-confirmed** on the analysis host: the physical map returned two
+distinct process addresses for `0xFFDF0000` - direct user-mode R/W over
+arbitrary physical memory.
 
 **files**
 
@@ -138,8 +141,10 @@ and entry point are then registered and reachable through the fork's HPVR0
 call path. plus `SUP_IOCTL_MSR_PROBER` (arbitrary rdmsr/wrmsr), kernel page
 map/protect, and the full VBox R0 export surface for whatever gets loaded.
 
-admin → kernel code execution via `CreateFile` + three IOCTLs on a driver
-installed by a mainstream Android emulator, invisible to the blocklist.
+the loader chain is fully confirmed in code; live testing additionally showed
+the driver enforces a session-state requirement on top (see the analysis), so
+the command surface is not reachable by an external admin process without
+replicating the MEmu service's session setup.
 
 - [`report/memudrv/ANALYSIS.md`](report/memudrv/ANALYSIS.md) — loader chain, fallback bypass, primitive table, blocklist case
 - [`report/memudrv/memudrv.h`](report/memudrv/memudrv.h) — reversed interface header (full IOCTL table + unioned request structs)

@@ -31,7 +31,8 @@ primitive surface — and shipping it with the hardening stripped:
   `CALL_HPVR0` — the full VBox SUP_IOCTL menu
 
 This is a **complete kernel code-execution primitive set** behind `CreateFile`
-+ sequential IOCTLs from an administrator process — the same primitive class
++ sequential IOCTLs from an administrator process (statically confirmed; live
+access is additionally gated by a session-state requirement - section 5b) — the same primitive class
 as the blocklisted VBoxDrv ancestors and classic BYOVD loader drivers.
 
 ## 2. The module loader chain (the core finding)

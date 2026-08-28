@@ -253,8 +253,9 @@ requires `msr >= 8` and 8-byte output. All three consult the same static table
 - No ungated arbitrary port I/O (43-range allowlist).
 - No token/process/kernel-write IOCTLs (nothing calls `MmCopyVirtualMemory`-
   class APIs; no `ZwOpenProcess`).
-- No caller-process *authentication* either — but no caller-gated privilege
-  difference to exploit; everything above is reachable by any admin handle.
+- Caller-process authentication **is** present at CREATE (module-base
+  whitelist populated by the process-notify callback, §7b) — everything
+  above is reachable only by ASUS-validated callers, not by arbitrary admins.
 
 ## 6. Recommendations (vendor)
 
