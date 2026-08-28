@@ -36,15 +36,22 @@ as the blocklisted VBoxDrv ancestors and classic BYOVD loader drivers.
 
 ## 2. The module loader chain (the core finding)
 
-### 2.1 `SUP_IOCTL_LDR_OPEN` → `sub_1400048A0`
+### 2.1 `SUP_IOCTL_LDR_OPEN` → `sub_1400048A0` (full flow, `cbIn = 328 / cbOut = 40`)
 
-Input: module name (32B, charset-validated), filename (260B), image sizes.
-Handler:
+Input: `cbImageWithTabs` (1..0xFFFFFF), `cbImageBits` (1..cbImageWithTabs),
+`szName[32]` (charset-validated against a 22-byte whitelist), `szFilename[260]`.
+Output: `hLdrMod` (u64) + two state bytes.
 
-1. Reuses an existing module record if the name matches.
-2. Otherwise creates a 160-byte module record and calls
-   `sub_140012720(devext, module, szFilename)` — attempts to **open the file**.
-3. **Fallback:** if the open returns `VERR_FILE_NOT_FOUND (-37)`:
+Flow:
+
+1. Under the global mutex, the module list is searched by name. A hit
+   increments its reference count and returns the existing handle — a name
+   collision with another session's module reuses that module's image.
+2. No match → a 160-byte module record is allocated (tag `K400`-family),
+   initialized with the requested sizes and the `LDR_OPEN` state marker
+   (`2261516`), name copied at +0x79.
+3. `sub_140012720(devext, module, szFilename)` attempts to **open the file**.
+   On `VERR_FILE_NOT_FOUND (-37)` — **the fallback**:
 
 ```c
 v14 = RTMemExecAllocTag(cbImageWithTabs + 31);   // executable kernel memory
@@ -52,6 +59,12 @@ module->image       = v14;
 module->imageAligned = (v14 + 31) & ~31;
 module->fromFile    = 0;                          // +0x78 flag = 0
 ```
+
+   No file, no hash, no signature, no name policy — an executable kernel
+   allocation registered as a loadable module. On the file-found path the
+   flag is set (`fromFile = 1`), which is the only difference downstream.
+4. The handle and flags return to the caller; `SUPR0ResumeVTxOnCpu` is a
+   no-op stub in this build.
 
 **A nonexistent filename yields an RWX kernel allocation with no file, no
 verification, and the `fromFile` flag cleared** — which disables the deeper
@@ -90,12 +103,27 @@ flow, with the caller-controlled module in place of the hypervisor payload.
 
 | IOCTL family | primitive |
 |---|---|
-| `SUP_IOCTL_MSR_PROBER` | arbitrary `rdmsr`/`wrmsr` |
-| `SUP_IOCTL_PAGE_MAP_KERNEL` / `PAGE_PROTECT` | map kernel pages / alter protections |
-| `SUP_IOCTL_PAGE_ALLOC_EX` | page alloc with **user mapping** |
-| `SUP_IOCTL_LOW_ALLOC` / `CONT_ALLOC` | <4GB / contiguous allocations (staging) |
-| `SUP_IOCTL_SEM_OP2/3`, `LOGGER_SETTINGS`, `CALL_SERVICE` | auxiliary surface |
+| `SUP_IOCTL_MSR_PROBER` (7 codes, `0x228270`+) | arbitrary `rdmsr`/`wrmsr` (serialized per-thread; delegates to the TDT impl object's vtable+0x20) |
+| `SUP_IOCTL_PAGE_MAP_KERNEL` (`0x22822C`) | map a PAGE_ALLOC_EX object into kernel space — `offSub`/`cbSub` 4K-aligned, returns R0 VA |
+| `SUP_IOCTL_PAGE_PROTECT` (`0x228230`) | alter protections on a mapped object (`fProt` bits 0-2) |
+| `SUP_IOCTL_PAGE_ALLOC_EX` (`0x228228`) | page alloc with user mapping capable |
+| `SUP_IOCTL_LOW_ALLOC`/`LOW_FREE` (`0x228220`/`0x228224`) | <4GB page allocation returning **physical addresses + R0 VA** |
+| `SUP_IOCTL_PAGE_LOCK` (`0x228234`) | lock an R3 buffer (MDL path) |
+| `SUP_IOCTL_CALL_HPVR0`/`_BIG` (`0x22821C`/`0x22826C`) | invoke the loaded module's registered entry (VM-handle bound to session) |
+| `SUP_IOCTL_SET_VM_FOR_FAST` (5 forms) | bind a VM for the fast-call path |
+| `SUP_IOCTL_CALL_SERVICE` (3 forms) | internal service dispatch |
 | exports (`SUPR0ChangeCR4`, `RTR0MemObjEnterPhysTag`, `SUPR0PageAllocEx`, `RTMemExecAllocTag`, …) | the full VBox R0 API for loaded modules |
+
+Additional leaks/oracles observed on the surface:
+
+- `SUP_IOCTL_COOKIE` response embeds the raw kernel `SUPDRVSESSION*`
+  (`*(_QWORD *)(req + 48) = session`) — kernel pointer disclosure on the
+  handshake.
+- `SUP_IOCTL_QUERY_FUNCS` returns the complete 274-entry SUPR0 export-name
+  table — a full API oracle for whatever module gets loaded.
+- `CALL_HPVR0` binds execution to the session's VM object: the request's VM
+  handle must equal `session+0x40`; the call dispatches through session
+  vtable+0x38 with the module-registered entry.
 
 ## 3. What the fork stripped vs. upstream VBox
 
