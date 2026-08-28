@@ -1,137 +1,184 @@
-# KslD.sys / MpKslDrv — Microsoft Defender Kernel Signature Library: recon
+# KslD.sys / MpKslDrv — Microsoft Defender KSL: Intel TDT command interface behind image-name authentication
 
-**Driver:** `KslD.sys` ("KSLD"), internal name `MpKslDrv` — deployed by Microsoft
-Defender as randomly-suffixed instances (`MpKsl<hex>`) under both
-`System32\drivers\` and `System32\drivers\wd\`
+**Driver:** `KslD.sys` ("KSLD", internal `MpKslDrv`) — Microsoft Defender Kernel
+Signature Library embedding **Intel TDT** (`tdt_driver_lib`, Threat Detection
+Technology / IPT telemetry). Deployed as transient per-scan instances
+(`MpKsl<hex>`) under `System32\drivers\` and `System32\drivers\wd\`.
 **Signer:** Microsoft Windows (inbox, WHQL)
-**Status:** recon complete — **closed as not-a-vulnerability** (see §6)
-**Analysis date:** 2026-08-28
+**Status:** full static analysis — command interface mapped; exploitability
+hinges on one gate (§4)
+**Analysis date:** 2026-08-28 · IDA Pro 9.3 headless + Hex-Rays
 
 ---
 
-## 1. What the driver is
+## 1. Summary
 
-`MpKslDrv` is the **Kernel Signature Library** component of Microsoft Defender.
-The import set gives away the role:
+MpKslDrv exposes **one** IOCTL (`0x222044`, buffered, in ≥ 4) on its device.
+The handler is a command multiplexer (`CDeviceKsl::OpDeviceControl`) walking
+registered command objects (`CCommand`, `CCommandFile`, `CCommandROM` — an
+Intel TDT command set). Sub-commands available through it include **arbitrary
+physical-memory page read, arbitrary kernel routine-address disclosure,
+kernel-mode arbitrary file read, SPI BIOS flash read, process connection by
+arbitrary PID, and a virtual-memory copy primitive with separate read and
+write flag bits**.
 
-- `KeRegisterBugCheckReasonCallback` / `KeDeregisterBugCheckReasonCallback`
-- `KeAddTriageDumpDataBlock` / `KeInitializeTriageDumpDataArray` (all resolved
-  at runtime via `MmGetSystemRoutineAddress` — 16+ dynamic resolutions)
-- `PsSetCreateProcessNotifyRoutineEx`, `PsSetCreateThreadNotifyRoutine(Ex)`,
-  `PsSetLoadImageNotifyRoutine`, `PsRemove*`
+Access control is a single check in `CDeviceKsl::OpCreate`: the opening
+process's image path (`ProcessImageFileName`) must **string-match** a
+configured name (the Defender consumer, i.e. MsMpEng). No token, capability,
+or signature verification exists. The entire command surface sits behind that
+string comparison.
 
-It registers bugcheck-reason callbacks and feeds triage dump blocks — the
-driver scans crash context for malicious-driver evidence and supports the
-Defender scan engine with PID-targeted inspection. Memory machinery
-(`ZwOpenProcess`, `ZwMapViewOfSection`, `MmMapIoSpace`, MDL build/lock) serves
-that job. A section named `awesome` holds runtime-built strings (device-name
-assembly).
-
-Instances are transient: no `MpKsl*` service persists between Defender
-operations (verified live — only `WdFilter` present between scans). The user
-host is `MsMpEng`; the driver maintains a shared-memory bridge to it.
-
-## 2. Attack surface
-
-Exactly **one** device IOCTL in 66k instructions of code:
+## 2. Architecture
 
 ```
-0x222044  FILE_DEVICE_UNKNOWN, FILE_ANY_ACCESS, METHOD_BUFFERED, in >= 4
+user process ──CreateFile──▶ OpCreate: image-name gate (§4)
+     │                                │ pass → device marked connected
+     └──DeviceIoControl 0x222044──▶ CDeviceKsl::OpDeviceControl
+                                       │ for each command object:
+                                       │   vtable[1] IsSupported(cmd)
+                                       │   vtable[2] Handle(cmd, in, out)
+                                       ▼
+                        CCommand (0,1,2,7,8,0xB,0xC)
+                        CCommandFile (3,4,5,6,9)
+                        CCommandROM (0xE..0x13)
 ```
 
-Handler `sub_140005DC0` is a **provider multiplexer**:
+- `CCommand` objects hold the owning device at `+0x10` and a **copy callback
+  function pointer at `+0x18`** (installed at registration, used by the
+  mmcopy command — the implementation is provided by the device layer).
+- The connected `_KPROCESS` is set by `CDeviceKsl::SetConnectionHelper(pid)`
+  (`ZwOpenProcess` by ClientId, `ObReferenceObjectByHandle`, EPROCESS stored
+  at object `+0x58`) and is the attach target for physical-memory reads.
 
-```
-for each registered provider in ctx->[0xC8] / ctx->[0xD0]:
-    match  = provider->vtable[1]     // al = match(provider, input_dword)
-    if match(input_dword):
-        dispatch = provider->vtable[2]
-        status = dispatch(provider, input_dword, inbuf, inlen, ...)
-```
+## 3. Command reference (sub-command → behavior)
 
-Providers are C++ objects with `.rdata` vtables (`0x140046820`-region). Function
-pointer cross-references found in those tables:
+### CCommand::Handle (base)
 
-| vtable slot | function | role |
+| cmd | in len | behavior |
 |---|---|---|
-| `0x140046848` | `sub_1400058F0` | **open target by ClientId**, access `0x80000000` (read-class), OBJECT_ATTRIBUTES `0x200` |
-| `0x140046880` | `sub_140005AF0` | **open current process, `GENERIC_ALL`** — the MsMpEng bridge |
-| `0x140046898` | `sub_140005DC0` | the multiplexer itself |
+| 0 | ≥4 | version string (`0x0104`) |
+| **1** | ≥0x18 | **physical memory read** — see §3.1 |
+| 2 | ≥8 | per-CPU register read (`kslIoctlGetCpuRegisters`) |
+| **7** | ≥0xC | **routine address leak** — `MmGetSystemRoutineAddress(UnicodeName from input)` → 8-byte kernel VA out (§3.2) |
+| **8** | ≥8 | **connect**: device vtable+8 → `SetConnectionHelper(*(u32*)(in+4))` |
+| 0xB | ≥4 | connected flag query |
+| **0xC** | ≥0x20 | **virtual memory copy** — see §3.3 |
 
-The `0x222044` input's first dword is passed to both the matcher and the
-dispatcher — i.e. **a caller-supplied PID flows through the provider chain**
-into process-opening logic.
+### 3.1 `kslIoctlGetPhysicalMemory` (cmd 1)
 
-## 3. The open question
-
-Can an external process drive `0x222044` such that a provider opens an
-**arbitrary PID** with read access? If yes, the driver is an admin→PPL-read
-relay: a Defender-signed kernel component opening protected processes for
-memory reading, reachable from an admin context — a legitimate MSRC report
-(PPL/anti-tamper bypass via in-box AV driver).
-
-Static analysis needed to settle it (not yet done):
-
-1. Reconstruct the provider vtables: which providers register at DeviceAdd, and
-   what their match functions accept (PID? scan-request ID? signature tag?)
-2. Identify the device name construction (`\Device\` + runtime suffix in the
-   `awesome` section) and the effective device SD (no SDDL strings in the
-   binary; KMDF default is admin-only — but the consumer is MsMpEng, which runs
-   as `SYSTEM`, so the device may effectively be reachable only to SYSTEM)
-3. Enumerate what the matched dispatchers do with `{inbuf, inlen}` — is the PID
-   used as a *scan target* (internal policy decides) or as an *opaque argument*
-   to `sub_1400058F0` (attacker-steerable)?
-
-Dynamic route: the service is transient and its start is gated; capturing a
-live instance (`sc` during a Defender scan, or DEFCON-style: trigger the
-`MsMpEng` scan path) and driving `0x222044` from an admin test process is the
-fast path to a yes/no.
-
-## 4. Related machinery (context, not primitives)
-
-- `ZwMapViewOfSection` ×2 (`0x140007160`, `0x1400071B5`) — section mapping in
-  the scan bridge (file-backed image sections, not `\Device\PhysicalMemory` —
-  no PhysicalMemory string exists in this binary, unlike CorMem/AsIO3).
-- `MmMapIoSpace` ×2 (`0x140009D76`, `0x14000A134`) — consistent with
-  `HalAllocateHardwareCounters`-style PT/IPT counter setup for tracing.
-- Registry: `ZwDeleteKey`/`ZwSetValueKey` imports — cleanup of its own service
-  keys during transient instance lifecycle.
-
-## 5. Verdict: the PID reaches ZwOpenProcess, but crosses no boundary
-
-Vtable reconstruction settled §3. The provider class vtable is at `0x140046840`:
+Input `ksl_physmem_s {pad, i64 phys_offset, u64 count, ...}`. Validation:
+count ≠ 0, `phys_offset ≥ 0`, count ≤ output capacity, and offset/count must
+not cross a 4KB page boundary. Then:
 
 ```
-+0x00  0x140004CE0   destructor (via ctor/dtor helper sub_140004D20)
-+0x08  0x1400058F0   "match" slot — IS open_target_by_cid
-+0x10  0x140005AD0   "dispatch" slot — operate on the opened handle
+KeStackAttachProcess(connected_process)
+ZwOpenSection(\device\physicalmemory, SECTION_MAP_READ)
+ZwMapViewOfSection(..., Protect=PAGE_READONLY; retry PAGE_READWRITE on access-denied)
+memmove(out_buffer, mapped + offset_in_page, count)   @ DISPATCH_LEVEL, TLB flush
 ```
 
-The multiplexer flow, resolved: `0x222044 {pid}` walks providers calling
-vtable+8 = **open_target_by_cid(provider, pid)** directly — the "match" step
-*is* the process open (`ZwOpenProcess(ClientId=pid, DesiredAccess=0x80000000)`,
-skipped when the provider already holds a handle at object `+0x58`). First
-provider to succeed runs vtable+0x10 against the handle.
+**No restriction on which physical page.** Kernel RAM, other processes' pages,
+firmware — any page, per call, into the caller's output buffer. The
+`KeStackAttachProcess` to the (PPL) connected process influences token context
+for the section open, not the set of mappable memory.
 
-So yes — the IOCTL's PID dword is attacker-steerable and reaches
-`ZwOpenProcess` in kernel mode. It still isn't a vulnerability:
+### 3.2 `kslIoctlGetRoutineAddr` (cmd 7)
 
-- `Zw*` access checks evaluate the **calling process's token**. An unprotected
-  admin opening a PPL target gets `STATUS_ACCESS_DENIED` exactly as it would
-  from user mode — protection is checked against the opener, not the driver.
-- For every non-protected process, an admin already holds `SeDebugPrivilege`;
-  routing the open through a Microsoft-signed driver grants nothing extra.
-- The opened handle lands in the provider object (`+0x58`), not the caller's
-  handle table — the caller only sees what the vtable+0x10 operation outputs.
+Caller supplies a UTF-16 kernel routine name; driver returns
+`MmGetSystemRoutineAddress(name)` — a **kernel virtual address** to the
+caller. KASLR disclosure for any exported (and this API-resolvable) routine.
 
-Unusual design, privilege math unchanged. MpKslDrv is Defender plumbing doing
-Defender things, for a PPL consumer (MsMpEng) anyway. Closed.
+### 3.3 `kslIoctlMmCopy` (cmd 0xC)
 
-## 6. Assessment
+Input `ksl_mmcopy_s {pad8, u64 target_va, u64 size, u32 flags, ...}`, size ≤
+output capacity, `lfence`-guarded call to the command object's copy callback
+(field `+0x18`):
 
-Single-IOCTL design, internally-registered providers, SYSTEM consumer — narrow
-by construction, and the one spicy path (IOCTL-steered kernel process opens)
-preserves all privilege boundaries. MpKslDrv joins the "analyzed — no
-user-facing privilege primitive" list. Lesson for the hunt: Microsoft's
-diagnostic/AV drivers expose *machinery*, not *primitives* — the productive
-lane remains vendor-signed utility drivers.
+```
+flags bit0 = 1 → mode 1 (read)
+flags bit1 = 1 → mode 2 (write)
+```
+
+**Both read and write modes are selected by the input.** The callback
+implementation is supplied by the device layer at command registration; the
+write path's presence in the protocol (a dedicated mode-2 encoding) is the
+difference between kernel-read and full kernel read/write. Implementation
+needs one more tracing pass (callback target, set during command registration
+inside `CDriver::CreateDevice`).
+
+### 3.4 `CCommandFile` (cmds 3,4,5,6,9)
+
+Kernel-mode file operations: **read arbitrary files** (two modes — standard
+and a second read path, `kslIoctlReadFile`), file size, and
+`kslIoctlFileRetrievalPointers` (physical extent layout of a file — useful for
+the physical-read primitive to target cached file pages).
+
+### 3.5 `CCommandROM` (cmds 0xE–0x13)
+
+SPI flash tooling: flash-read support probe, **SPI BAR physical address
+acquisition**, BIOS flash info (Intel + AMD variants), and
+`kslIoctlFlashRomRead` — maps the SPI controller BAR with `MmMapIoSpace(MmNonCached)`,
+drives SPI read cycles (`SpiWaitCheckCycleDone`/`SpiSendSpiCycle`), and
+streams the BIOS ROM content to the caller. Firmware dump primitive.
+
+## 4. The gate — `CDeviceKsl::OpCreate`
+
+```c
+pid  = PsGetCurrentProcessId();
+ZwOpenProcess(&h, GENERIC_ALL, ..., &ClientId{pid});
+ZwQueryInformationProcess(h, ProcessImageFileName, ...);   // caller's NT image path
+expected = device->config->vtable[32](device->config);     // configured name
+if (RtlCompareUnicodeString(expected, caller_path, CASE_INSENSITIVE) != 0)
+    return STATUS_ACCESS_DENIED;                            // create fails
+device->connected = TRUE;  device->caller_pid = pid;
+```
+
+Properties of this gate:
+
+- **Authentication by string.** The caller's image *path* is compared to a
+  configured Unicode string (the Defender consumer image, e.g. MsMpEng's
+  platform path). Nothing about the caller's token, signature, or provenance
+  is verified.
+- The expected name is device configuration. `CDeviceBase::getParamFromRegistry`
+  exists in the same class hierarchy — if the expected name is registry-fed
+  (HKLM), an **administrator rewrites it and walks through**.
+- Even without registry access, path-equivalence tricks (hardlinks/symlinks
+  where ACLs permit, TOCTOU on image path) are the standard failures of
+  name-based auth.
+- Non-admin attackers face the KMDF default device ACL (admin/SYSTEM) *and*
+  the randomized device name (`MpKsl<hex>` instances) — enumeration is
+  possible but the name gate remains the barrier.
+
+## 5. Impact assessment (conditional on gate passage)
+
+| Primitive | Boundary crossed |
+|---|---|
+| physical page read (cmd 1) | **admin → kernel memory read** (credential/structure/KASLR material) |
+| routine address leak (cmd 7) | KASLR defeat |
+| kernel file read (cmd 3/5) | reads under the attached process's context (SYSTEM/PPL consumer) |
+| SPI flash read (0x11/0x13) | firmware disclosure |
+| mmcopy (cmd 0xC) | read = kernel read; **write = full admin→kernel EoP** (implementation confirmation pending) |
+
+Everything is admin-gated at minimum (device ACL), so this is an
+**admin→kernel elevation** finding, not a user→admin one — contingent on
+passing the image-name gate as an admin (registry config writability, or
+path equivalence). The design flaw is categorical: a full-featured kernel
+command interface protected by *string comparison of the caller's image name*.
+
+## 6. Remaining work
+
+1. Trace the expected-name configuration source (registry value vs. hardcoded
+   parent-supplied) — determines admin bypassability.
+2. Trace the mmcopy callback implementation (read-only vs. write-capable).
+3. Dynamic confirmation: capture a live `MpKsl*` instance during a Defender
+   scan, verify device name/ACL, attempt `OpCreate` from a renamed test
+   process vs. the configured name.
+
+## 7. Reproduction / tooling
+
+Headless IDA pipeline used: `idat.exe -A -S<script>` with IDAPython +
+Hex-Rays (see repo history). Key addresses: multiplexer `0x140005DC0`,
+`OpCreate` `0x140005AF0`, `SetConnectionHelper` `0x1400058F0`, command vtable
+`0x1400468C8` (CCommand), `0x1400468F8` (CCommandFile), `0x140046910`
+(CCommandROM), phys read `0x140006FC0`, mmcopy `0x140007808`, routine-addr
+`0x1400076F0`, flash read `0x140009C2C`.

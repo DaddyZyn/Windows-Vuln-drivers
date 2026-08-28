@@ -10,7 +10,7 @@ driver: full analysis, reversed interface header, non-destructive PoC.
 |---|---|---|---|---|---|
 | [CorMem.sys](report/cormem/ANALYSIS.md) | Teledyne Digital Imaging | 9.00 | arbitrary physical memory map, raw I/O port R/W, kernel pointer disclosure | not listed | none |
 | [AsIO3.sys](report/asio3/ANALYSIS.md) | ASUSTeK | 1.02.40 | ungated PCI config read, firmware-region phys map (RW), wide port allowlist (SMI/CMOS/EC), contiguous alloc oracle | not listed | none |
-| [KslD.sys / MpKslDrv](report/ksld/ANALYSIS.md) | Microsoft (Defender) | - | single provider-multiplexed IOCTL; PID reaches ZwOpenProcess but PPL/admin boundaries hold — closed | n/a (in-box) | n/a |
+| [KslD.sys / MpKslDrv](report/ksld/ANALYSIS.md) | Microsoft (Defender) | - | full TDT command interface: arbitrary phys page read, kernel routine addr leak, kernel file read, SPI flash read, R/W mmcopy — behind image-name auth | n/a (in-box) | pending |
 
 ---
 
@@ -100,16 +100,22 @@ device: \Device\Asusgio3        pdb: AsIO3_64.sys.pdb
 
 ---
 
-## KslD.sys — Microsoft Defender Kernel Signature Library (MpKslDrv)
+## KslD.sys — Microsoft Defender KSL (Intel TDT command interface)
 
-closed as not-a-vulnerability, writeup kept for the method. Defender's
-crash-triage scanner (bugcheck reason callbacks + triage dump blocks) exposes
-exactly one device IOCTL: `0x222044`, a C++ provider multiplexer whose "match"
-slot *is* `ZwOpenProcess(ClientId = attacker-supplied pid)`. The pid is
-steerable, but `Zw*` checks run against the caller's token — PPL still denies,
-and admin already had everything else. Privilege math unchanged.
+the big one. Defender's Kernel Signature Library embeds Intel's TDT command
+set and exposes it through a single multiplexed IOCTL (`0x222044`): arbitrary
+physical-memory page read, `MmGetSystemRoutineAddress` KASLR leak,
+kernel-mode arbitrary file read, SPI BIOS flash read, process-attach by
+arbitrary PID, and a virtual-memory copy primitive with separate read/write
+flag bits.
 
-- [`report/ksld/ANALYSIS.md`](report/ksld/ANALYSIS.md) — surface map, vtable layout, why it doesn't cross a boundary
+the catch: `OpCreate` gates the device on **string comparison of the caller's
+image path** against the configured consumer name (MsMpEng). No token check,
+no signature check — authentication by string. Whether that's passable by an
+admin (registry-fed config, path equivalence) decides if this is an
+admin→kernel elevation report to MSRC.
+
+- [`report/ksld/ANALYSIS.md`](report/ksld/ANALYSIS.md) — full command reference, the gate, impact matrix, open items
 
 ---
 
