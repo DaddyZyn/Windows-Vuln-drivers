@@ -10,7 +10,7 @@ driver: full analysis, reversed interface header, non-destructive PoC.
 |---|---|---|---|---|---|
 | [CorMem.sys](report/cormem/ANALYSIS.md) | Teledyne Digital Imaging | 9.00 | arbitrary physical memory map, raw I/O port R/W, kernel pointer disclosure | not listed | none |
 | [AsIO3.sys](report/asio3/ANALYSIS.md) | ASUSTeK | 1.02.40 | ungated PCI config read, firmware-region phys map (RW), wide port allowlist (SMI/CMOS/EC), contiguous alloc oracle | not listed | none |
-| [KslD.sys / MpKslDrv](report/ksld/ANALYSIS.md) | Microsoft (Defender) | - | Intel TDT command interface: arbitrary phys page read, kernel routine addr leak, kernel file read, SPI flash read — gated by image-name compare against an admin-writable registry value | n/a (in-box) | pending |
+| [KslD.sys / MpKslDrv](report/ksld/ANALYSIS.md) | Microsoft (Defender) | 1.1.26051 | Intel TDT command interface (phys read, routine addr leak, file read, SPI flash) — image-name gate is registry-fed, but live test shows deployed build enforces more; downgraded to hardening finding | n/a (in-box) | n/a |
 
 ---
 

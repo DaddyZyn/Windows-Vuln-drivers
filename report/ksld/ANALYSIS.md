@@ -6,10 +6,13 @@ Technology / IPT telemetry). Deployed as transient per-scan instances
 (`MpKsl<hex>`) under `System32\drivers\` and `System32\drivers\wd\`.
 **Signer:** Microsoft Windows (inbox, WHQL)
 **Status:** full static analysis (IDA Pro 9.3 headless + Hex-Rays, 4 passes)
++ live validation on the analysis host (Defender platform 4.18.26070.9-0)
 **Finding:** kernel command interface (physical memory read, routine-address
-leak, kernel file read, SPI flash read) whose only access control is an image-
-path string comparison against `AllowedProcessName` — **a value read from the
-service's Parameters registry key, writable by administrators**
+leak, kernel file read, SPI flash read) whose static access control is an
+image-path string comparison against `AllowedProcessName` (registry-fed,
+admin-writable key). **Live testing: rewriting the value and restarting the
+driver did NOT grant access** - deployed builds enforce more than the traced
+path shows. Downgraded: design concern, not a confirmed bypass.
 **Analysis date:** 2026-08-28
 
 ---
@@ -38,10 +41,13 @@ control passes the gate, connects, and obtains **kernel physical-memory read
 via a Microsoft-signed driver** — crossing the admin→kernel boundary for
 reads (credential/structure/key material disclosure, KASLR defeat).
 
-Severity: **moderate elevation (admin → kernel read)**, gated on winning a
-configuration window against MsMpEng (§5). The categorical defect is that a
-kernel command interface is protected by a registry string + image-name
-comparison instead of a token/capability check.
+Severity: **downgraded after live testing.** The static path suggests an
+admin-passable gate, but live testing (§5b) shows denial persists with a
+matching `AllowedProcessName` and a verified driver restart — the deployed
+build enforces an additional layer not present in the traced code path, or
+the compared value is fed out-of-band by MsMpEng. The categorical design
+observation stands: authentication by image-name string comparison, with the
+reference value in an admin-writable registry key.
 
 ## 2. Architecture
 
@@ -159,10 +165,34 @@ Practical constraints (why moderate, not critical):
   write via key ACL — a race/leverage problem, not a cryptographic one.
 - The exposed primitives are **read-class**; the write-capable mmcopy is
   inert (§3.3). No user (non-admin) path: SDDL + device-name randomization.
-- Boundary crossed: admin → kernel read. Credential/structure disclosure,
-  KASLR defeat, firmware dump.
+- Boundary crossed (static analysis): admin → kernel read. Credential/
+  structure disclosure, KASLR defeat, firmware dump.
 
-## 5. Recommendations (Microsoft / Defender team)
+## 5b. Live validation (Defender platform 4.18.26070.9-0, Win11)
+
+Executed on the analysis host (self-reversing test script, config backed up
+and restored, service returned to original state):
+
+| step | action | result |
+|---|---|---|
+| 1 | `KslD` service state | **Running** (Start=Manual — persistent, not transient on this build) |
+| 2 | registry config | `AllowedProcessName` = MsMpEng platform path, `DeviceName` = `KslD`, `Version` = 1.1.26051.3007 — **matches the `initializePrivatedata` schema exactly** |
+| 3 | key ACL | `BUILTIN\Administrators: FullControl` — **no tamper-hardening on the config key**; writing `AllowedProcessName` succeeded (Tamper Protection did not block it) |
+| 4 | open `\\.\KslD` as non-matching admin | **DENIED, ERROR_ACCESS_DENIED** — gate live |
+| 5 | rewrite `AllowedProcessName` to the test process's exact NT image path | write + readback OK |
+| 6 | explicit `Stop-Service` → verified **Stopped** → `Start-Service` (driver re-initializes, re-reads registry) | completed |
+| 7 | open with **matching** path | **STILL DENIED, ERROR_ACCESS_DENIED** |
+
+Interpretation: the deployed build denies access even when the statically-
+traced gate condition is satisfied. Candidates: (a) `OpCreate` compares a
+different string object than the one `AllowedProcessName` populates (the
+object at device `+0x48` vs the value stored at `+0x78` — layout mismatch
+flagged during analysis), (b) MsMpEng rewrites the config out-of-band during
+service start, (c) an additional enforcement layer in current platform code.
+Net: **no confirmed bypass**; the registry-string design remains the report-
+able weakness, at hardening grade.
+
+## 6. Recommendations (Microsoft / Defender team)
 
 1. Authenticate the consumer by reference, not by name: pass the consumer's
    EPROCESS at instance creation (kernel handle from MsMpEng's PPL context)
