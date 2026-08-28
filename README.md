@@ -41,6 +41,19 @@ loaders, 0/71 VT detection), still not blocklisted, still no CVE.
 9977054734C44B080FB26FE8F296CD3CCEBACF2BDB7949617AECB14064A42247   unsigned copy
 ```
 
+**getting the samples**
+
+binaries aren't hosted here (they're Teledyne's). both `CorMem.sys` and the
+user-mode wrapper `CorMem.dll` ship inside the official Sapera LT SDK installer:
+
+> https://www.teledynedalsa.com/en/products/imaging/vision-software/sapera-lt/
+
+free download, requires a Teledyne account login. install on a throwaway VM and
+pull `CorMem.sys` from `C:\Windows\System32\drivers\` (or the SDK's `bin` dir)
+and `CorMem.dll` from the SDK runtime folder. verify SHA256 against the hashes
+above before analyzing — the SDK version line matters, 9.00 is what this writeup
+covers. older 8.x builds are floating around with the same interface.
+
 ---
 
 ## disclosure
