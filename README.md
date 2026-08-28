@@ -10,6 +10,7 @@ driver: full analysis, reversed interface header, non-destructive PoC.
 |---|---|---|---|---|---|
 | [CorMem.sys](report/cormem/ANALYSIS.md) | Teledyne Digital Imaging | 9.00 | arbitrary physical memory map, raw I/O port R/W, kernel pointer disclosure | not listed | none |
 | [AsIO3.sys](report/asio3/ANALYSIS.md) | ASUSTeK | 1.02.40 | ungated PCI config read, firmware-region phys map (RW), wide port allowlist (SMI/CMOS/EC), contiguous alloc oracle | not listed | none |
+| [KslD.sys / MpKslDrv](report/ksld/ANALYSIS.md) | Microsoft (Defender) | - | single provider-multiplexed IOCTL; PID-steering question open | n/a (in-box) | n/a |
 
 ---
 
@@ -96,6 +97,20 @@ gates changed between releases, so hash-check before comparing:
 version resource: 1.02.40, (C) 2022 Asustek Computer Inc.
 device: \Device\Asusgio3        pdb: AsIO3_64.sys.pdb
 ```
+
+---
+
+## KslD.sys — Microsoft Defender Kernel Signature Library (MpKslDrv)
+
+recon note, not a vuln report. the driver runs bugcheck-triage scanning for
+Defender (bugcheck reason callbacks + triage dump blocks) and exposes exactly
+one device IOCTL: `0x222044`, a C++ provider multiplexer. the interesting bit:
+a caller-supplied dword (PID-shaped) flows into provider match/dispatch that
+can open processes by ClientId — if a provider accepts it verbatim, that's an
+admin→PPL-read relay through a Defender-signed driver. vtable reconstruction +
+a live-instance test pending.
+
+- [`report/ksld/ANALYSIS.md`](report/ksld/ANALYSIS.md) — surface map, vtable layout, open questions
 
 ---
 
