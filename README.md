@@ -11,6 +11,7 @@ driver: full analysis, reversed interface header, non-destructive PoC.
 | [CorMem.sys](report/cormem/ANALYSIS.md) | Teledyne Digital Imaging | 9.00 | arbitrary physical memory map, raw I/O port R/W, kernel pointer disclosure | not listed | none |
 | [AsIO3.sys](report/asio3/ANALYSIS.md) | ASUSTeK | 1.02.40 | ungated PCI config read, firmware-region phys map (RW), wide port allowlist (SMI/CMOS/EC), contiguous alloc oracle | not listed | none |
 | [KslD.sys / MpKslDrv](report/ksld/ANALYSIS.md) | Microsoft (Defender) | 1.1.26051 | Intel TDT command interface (phys read, routine addr leak, file read, SPI flash) — image-name gate is registry-fed, but live test shows deployed build enforces more; downgraded to hardening finding | n/a (in-box) | n/a |
+| [MEmuDrv.sys](report/memudrv/ANALYSIS.md) | Shanghai Microvirt (MEmu) | 5.1.34 | VirtualBox SUPDrv fork, hardening stripped: ring-0 module loader with exec-alloc fallback (no file/signature checks), MSR prober, kernel page map/protect — mapper-grade | not listed | none |
 
 ---
 
@@ -119,6 +120,28 @@ being dead code keeps it at read-only, and the transient-instance timing keeps
 it "moderate".
 
 - [`report/ksld/ANALYSIS.md`](report/ksld/ANALYSIS.md) — full command reference, the gate and its registry source, impact matrix, recommendations
+
+---
+
+## MEmuDrv.sys — MEmu emulator's VirtualBox fork, hardening stripped
+
+the strongest find of the hunt. MEmu's hypervisor driver is a **VirtualBox
+SUPDrv fork** with the entire kernel primitive surface intact and the
+hardening gone: no wintrust, no caller validation, the historical
+*unrestricted* device (`\Device\MEmuDrvU`) still present.
+
+the core defect is the ring-0 module loader. `SUP_IOCTL_LDR_OPEN` with a
+**nonexistent filename** falls back to `RTMemExecAllocTag` — an RWX kernel
+allocation with no file and no verification — and clears the flag that gates
+the deeper entry-point validation in `SUP_IOCTL_LDR_LOAD`. the caller's image
+and entry point are then registered and reachable through the fork's HPVR0
+call path. plus `SUP_IOCTL_MSR_PROBER` (arbitrary rdmsr/wrmsr), kernel page
+map/protect, and the full VBox R0 export surface for whatever gets loaded.
+
+admin → kernel code execution via `CreateFile` + three IOCTLs on a driver
+installed by a mainstream Android emulator, invisible to the blocklist.
+
+- [`report/memudrv/ANALYSIS.md`](report/memudrv/ANALYSIS.md) — loader chain, fallback bypass, primitive table, blocklist case
 
 ---
 
